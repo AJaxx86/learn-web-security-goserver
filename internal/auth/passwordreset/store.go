@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 
 	"github.com/bootdotdev/learn-web-security/internal/database/dbgen"
 )
 
-const tokenTTL = 30 * 24 * time.Hour
+const tokenTTL = 15 * time.Minute
 
 type Token struct {
 	ID        int64
@@ -32,7 +35,12 @@ func NewStore(database *sql.DB) *Store {
 
 func (store *Store) Create(ctx context.Context, userID int64) (Token, error) {
 	now := store.now().UTC()
-	value := fmt.Sprintf("reset-%d-%d", userID, now.UnixNano())
+	bytes := make([]byte, 32)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return Token{}, fmt.Errorf("create token hex: %w", err)
+	}
+	value := hex.EncodeToString(bytes)
 	expiresAt := now.Add(tokenTTL)
 	if err := store.queries.CreatePasswordResetToken(ctx, dbgen.CreatePasswordResetTokenParams{
 		UserID:    userID,
@@ -119,7 +127,10 @@ func (store *Store) ResetPassword(ctx context.Context, value, passwordHash strin
 }
 
 func hashToken(value string) string {
-	return value
+	bytes := []byte(value)
+	encodedBytes := sha256.Sum256(bytes)
+	encodedString := hex.EncodeToString(encodedBytes[:])
+	return encodedString
 }
 
 func formatTimestamp(timestamp time.Time) string {
