@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,8 @@ func applyMiddleware(handler http.Handler, middlewareChain ...middleware) http.H
 func setNoSniff(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
 		responseWriter.Header().Set("X-Content-Type-Options", "nosniff")
+		responseWriter.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		responseWriter.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		next.ServeHTTP(responseWriter, request)
 	})
 }
@@ -82,6 +85,46 @@ func recoverPanics(logger *logging.Logger, renderer *templates.Renderer) middlew
 				}
 			}()
 			next.ServeHTTP(responseWriter, request)
+		})
+	}
+}
+
+func contentSecurityPolicy(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		policy := "default-src 'self'; script-src 'self' 'nonce-" + httpx.CSPNonce(request.Context()) + "'; style-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+		responseWriter.Header().Set("Content-Security-Policy", policy)
+		next.ServeHTTP(responseWriter, request)
+	})
+}
+
+func validateRequestOrigin(trustedOrigin string, renderer *templates.Renderer) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+			if request.Method != http.MethodPost {
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+			originHeader := request.Header.Get("Origin")
+			if originHeader == trustedOrigin {
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+			if originHeader == "" {
+				referer, err := url.Parse(request.Header.Get("Referer"))
+				if err != nil {
+					if err := httpx.RespondWithErrorPage(responseWriter, renderer, http.StatusForbidden, "checkOrigin error", "Referer header parsing failed"); err != nil {
+						http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					}
+					return
+				}
+				if referer.Scheme+"://"+referer.Host == trustedOrigin {
+					next.ServeHTTP(responseWriter, request)
+					return
+				}
+			}
+			if err := httpx.RespondWithErrorPage(responseWriter, renderer, http.StatusForbidden, "checkOrigin error", "origin authentication failed"); err != nil {
+				http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
 		})
 	}
 }

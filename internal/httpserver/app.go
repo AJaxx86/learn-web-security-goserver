@@ -215,7 +215,7 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 		}
 	})
 
-	dynamicHandler := permissiveCORS(dynamicMux)
+	dynamicHandler := validateRequestOrigin(options.AppOrigin, renderer)(permissiveCORS(dynamicMux))
 
 	mainMux := http.NewServeMux()
 	mainMux.HandleFunc("GET /health", func(responseWriter http.ResponseWriter, _ *http.Request) {
@@ -237,6 +237,7 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 		mainMux,
 		setNoSniff,
 		cspNonce,
+		contentSecurityPolicy,
 		recoverPanics(logger, renderer),
 	)
 	return &Application{Handler: handler, publicRoot: publicRoot}, nil
