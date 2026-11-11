@@ -147,6 +147,7 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 	dynamicMux.HandleFunc("GET /api/account/orders", apiHandler.AccountOrders)
 	dynamicMux.HandleFunc("GET /api/orders/{id}", apiHandler.Order)
 	dynamicMux.HandleFunc("GET /api/products", apiHandler.Products)
+	dynamicMux.HandleFunc("OPTIONS /api/products", apiHandler.ListProducts)
 	dynamicMux.HandleFunc("GET /api/integrations/warehouse/orders", apiHandler.WarehouseOrders)
 	dynamicMux.Handle("POST /products/{id}/reviews", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(reviewHandler.Create)))
 	dynamicMux.HandleFunc("GET /login", authenticationHandler.LoginPage)
@@ -215,29 +216,28 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 		}
 	})
 
-	dynamicHandler := validateRequestOrigin(options.AppOrigin, renderer)(permissiveCORS(dynamicMux))
+	dynamicHandler := validateRequestOrigin(options.AppOrigin, renderer)(dynamicMux)
 
 	mainMux := http.NewServeMux()
 	mainMux.HandleFunc("GET /health", func(responseWriter http.ResponseWriter, _ *http.Request) {
 		httpx.RespondWithJSON(responseWriter, http.StatusOK, map[string]any{"ok": true, "app": "bearly-secure"})
 	})
 	staticHandler := newStaticHandler(publicRoot)
+	widgetHandler := allowCrossOriginWidgetAssets(staticHandler)
 	mainMux.Handle("GET /reset.css", staticHandler)
 	mainMux.Handle("GET /styles.css", staticHandler)
 	mainMux.Handle("GET /passkey.js", staticHandler)
 	mainMux.Handle("GET /vendor/simplewebauthn/index.umd.min.js", staticHandler)
-	mainMux.Handle("GET /shipping-widget.css", staticHandler)
+	mainMux.Handle("GET /shipping-widget.css", widgetHandler)
 	mainMux.Handle("GET /shipping-widget.html", staticHandler)
-	mainMux.Handle("GET /shipping-widget.js", staticHandler)
+	mainMux.Handle("GET /shipping-widget.js", widgetHandler)
 	mainMux.Handle("GET /product-photos/{filename}", staticHandler)
 	mainMux.HandleFunc("POST /integrations/pawpal/webhook", pawPalHandler.Webhook)
 	mainMux.Handle("/", dynamicHandler)
 
 	handler := applyMiddleware(
 		mainMux,
-		setNoSniff,
-		cspNonce,
-		contentSecurityPolicy,
+		securityHeaders,
 		recoverPanics(logger, renderer),
 	)
 	return &Application{Handler: handler, publicRoot: publicRoot}, nil
